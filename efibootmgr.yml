@@ -1,0 +1,95 @@
+---
+
+- hosts: all
+  tasks:
+
+#Verify if the UEFI Boot Manager packages are installed on the target server
+  - name: Gather the package ansible_facts
+    package_facts:
+      manager: auto
+
+  - name: Gather if the efibootmgr packages is installed on the target server
+    debug:
+     var: ansible_facts.packages['efibootmgr']
+
+#Install the efibootmgr packages for UEFI Boot Management
+  - name: Install the efibootmgr package for the UEFI Boot Manager
+    package:
+      name:
+        - efibootmgr
+      state: present
+    when: "'efibootmgr' not in ansible_facts.packages"
+    become: yes
+    tags:
+      - packages
+
+#UEFI Boot Manager
+  - name: Execute the efibootmgr tool for manipulating the UEFI Boot Manager of the target server
+    command: efibootmgr
+    register: efibootmgr_out
+    when: ansible_facts['distribution'] == "CentOS" or ansible_facts['distribution'] == "Ubuntu"
+    become: yes
+    tags:
+      - uefi
+      - boot
+
+  - name: Display the current UEFI Boot Manager setting of the target server
+    debug: var=efibootmgr_out.stdout_lines
+
+#User prompt
+  - pause:
+        prompt: "Please select among the available UEFI Boot Manager options and insert ID 'XXXX' to set the next UEFI boot order 'BootNext'"
+        echo: yes
+    register: uefi_input
+
+  - set_fact:
+        uefi_bootoption: "{{uefi_input.user_input}}"
+       #uefibootmgr_subcommand: "{{subcommand_input.user_input}}"
+    tags:
+      - select
+
+#UEFI Boot Manager according user input
+  - name: Running the efibootmgr tool for manipulating the UEFI Boot Manager based on user's input
+    command: efibootmgr -n {{ uefi_bootoption }}
+   #command: efibootmgr {{ uefibootmgr_subcommand }} {{ uefi_bootoption }}
+    become: yes
+    tags:
+      - next boot
+
+#UEFI Boot Manager changes
+  - name: Applied changes in the UEFI Boot Manager settings
+    command: efibootmgr
+    register: output_of_efibootmgr
+
+  - name: Display the user's changes in the UEFI Boot Manager setting
+    debug: var=output_of_efibootmgr.stdout_lines
+    tags: 
+      - change
+
+#WARNING
+  - pause:
+        prompt: "WARNING! Would you like to reboot the target server to boot from 'BootNext: {{ uefi_bootoption }}'? Please answer with yes or no"
+        echo: yes
+    register: rebooting
+
+  - set_fact:
+        rebooting_parameter: "{{rebooting.user_input}}"
+    tags:
+      - yes or no
+
+#Rebooting the target server
+  - name: The user selected "yes" option, rebooting the target server
+    reboot:
+       msg: "The reboot of the server initiated by a remote user"
+       connect_timeout: 5
+       reboot_timeout: 600
+       pre_reboot_delay: 0
+       post_reboot_delay: 60
+       test_command: efibootmgr
+    when: rebooting_parameter
+    tags:
+      - reboot
+
+  - name: The user selected "no" option, skipping the rebooting of the targer server
+    command: echo no
+    when: not rebooting_parameter
